@@ -60,10 +60,19 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 		parts will return E - map{interface{}}interface{}
 		where each interface{} returned is slice of interfaces --> []interface{}
 	*/
-	parts := crowd.From(q.Parts()).Group(func(x interface{}) interface{} {
-		qp := x.(*dbox.QueryPart)
-		return qp.PartType
-	}, nil).Data
+	quyerParts := q.Parts()
+	c := crowd.From(&quyerParts)
+
+	groupParts := c.Group(func(x interface{}) interface{} {
+		return x.(*dbox.QueryPart).PartType
+	}, nil).Exec()
+
+	parts := map[interface{}]interface{}{}
+	if len(groupParts.Result.Data().([]crowd.KV)) > 0 {
+		for _, kv := range groupParts.Result.Data().([]crowd.KV) {
+			parts[kv.Key] = kv.Value
+		}
+	}
 
 	//return nil, errorlib.Error(packageName, modQuery, "Cursor", "asdaa")
 	//fmt.Printf("Query parts: %s\n", toolkit.JsonString(q.Parts()))
@@ -71,17 +80,17 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 	if hasFrom == false {
 		return nil, errorlib.Error(packageName, "Query", "Cursor", "Invalid table name")
 	}
-	tablename = fromParts.([]interface{})[0].(*dbox.QueryPart).Value.(string)
+	tablename = fromParts.([]*dbox.QueryPart)[0].Value.(string)
 
 	skip := 0
 	if skipParts, hasSkip := parts[dbox.QueryPartSkip]; hasSkip {
-		skip = skipParts.([]interface{})[0].(*dbox.QueryPart).
+		skip = skipParts.([]*dbox.QueryPart)[0].
 			Value.(int)
 	}
 
 	take := 0
 	if takeParts, has := parts[dbox.QueryPartTake]; has {
-		take = takeParts.([]interface{})[0].(*dbox.QueryPart).
+		take = takeParts.([]*dbox.QueryPart)[0].
 			Value.(int)
 	}
 
@@ -91,8 +100,8 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 		aggregate = true
 		aggrElements := func() []*dbox.QueryPart {
 			var qps []*dbox.QueryPart
-			for _, v := range aggrParts.([]interface{}) {
-				qps = append(qps, v.(*dbox.QueryPart))
+			for _, v := range aggrParts.([]*dbox.QueryPart) {
+				qps = append(qps, v)
 			}
 			return qps
 		}()
@@ -102,15 +111,15 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 			aggrExpression.Set(aggr.Alias, toolkit.M{}.Set(aggr.Op, aggr.Field))
 			//}
 		}
-		toolkit.Printf("Aggr: %s\n", toolkit.JsonString(aggrExpression))
+		//toolkit.Printf("Aggr: %s\n", toolkit.JsonString(aggrExpression))
 	}
 	partGroup, hasGroup := parts[dbox.QueryPartGroup]
 	if hasGroup {
 		aggregate = true
 		groups := func() toolkit.M {
 			s := toolkit.M{}
-			for _, v := range partGroup.([]interface{}) {
-				gs := v.(*dbox.QueryPart).Value.([]string)
+			for _, v := range partGroup.([]*dbox.QueryPart) {
+				gs := v.Value.([]string)
 				for _, g := range gs {
 					if strings.TrimSpace(g) != "" {
 						s.Set(g, "$"+g)
@@ -130,9 +139,9 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 	selectParts, hasSelect := parts[dbox.QueryPartSelect]
 	if hasSelect {
 		fields = toolkit.M{}
-		for _, sl := range selectParts.([]interface{}) {
-			qp := sl.(*dbox.QueryPart)
-			for _, fid := range qp.Value.([]string) {
+		for _, sl := range selectParts.([]*dbox.QueryPart) {
+			// qp := sl.(*dbox.QueryPart)
+			for _, fid := range sl.Value.([]string) {
 				fields.Set(fid, 1)
 			}
 		}
@@ -153,9 +162,9 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 	sortParts, hasSort := parts[dbox.QueryPartOrder]
 	if hasSort {
 		sort = []string{}
-		for _, sl := range sortParts.([]interface{}) {
-			qp := sl.(*dbox.QueryPart)
-			for _, fid := range qp.Value.([]string) {
+		for _, sl := range sortParts.([]*dbox.QueryPart) {
+			// qp := sl.(*dbox.QueryPart)
+			for _, fid := range sl.Value.([]string) {
 				sort = append(sort, fid)
 			}
 		}
@@ -166,8 +175,8 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 	whereParts, hasWhere := parts[dbox.QueryPartWhere]
 	if hasWhere {
 		fb := q.Connection().Fb()
-		for _, p := range whereParts.([]interface{}) {
-			fs := p.(*dbox.QueryPart).Value.([]*dbox.Filter)
+		for _, p := range whereParts.([]*dbox.QueryPart) {
+			fs := p.Value.([]*dbox.Filter)
 			for _, f := range fs {
 				fb.AddFilter(f)
 			}
@@ -177,7 +186,7 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 			return nil, errorlib.Error(packageName, modQuery, "Cursor",
 				e.Error())
 		} else {
-			//fmt.Printf("Where: %s", toolkit.JsonString(where))
+			//fmt.Printf("Where: %s\n", toolkit.JsonString(where))
 		}
 		//where = iwhere.(toolkit.M)
 	}
@@ -186,7 +195,7 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 	pipe := parts["pipe"]
 	if pipe != nil {
 		aggregate = true
-		pipes = pipe.([]interface{})[0].(*dbox.QueryPart).Value.([]toolkit.M)
+		pipes = pipe.([]*dbox.QueryPart)[0].Value.([]toolkit.M)
 	}
 
 	session := q.Session()
@@ -204,7 +213,7 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 		}
 		mgoPipe := session.DB(dbname).C(tablename).
 			Pipe(pipes).AllowDiskUse()
-		toolkit.Printf("Pipe: %s \n", toolkit.JsonString(pipes))
+		//toolkit.Printf("Pipe: %s \n", toolkit.JsonString(pipes))
 		//iter := mgoPipe.Iter()
 
 		cursor.(*Cursor).ResultType = QueryResultPipe
@@ -240,6 +249,8 @@ func (q *Query) Cursor(in toolkit.M) (dbox.ICursor, error) {
 	if cursor == nil {
 		return nil, errorlib.Error(packageName, modQuery, "Cursor", "Unable to initialize cursor. This is likely caused by unimplemented command or invalid series of query")
 	}
+
+	//fmt.Println("Where: " + toolkit.JsonString(where))
 	return cursor, nil
 }
 
@@ -264,30 +275,28 @@ func (q *Query) Exec(parm toolkit.M) error {
 	data := parm.Get("data", nil)
 
 	/*
-		p arts will return E - map{interface{}}interface{}
+		parts will return E - map{interface{}}interface{}
 		where each interface{} returned is slice of interfaces --> []interface{}
 	*/
-	parts := crowd.From(q.Parts()).Group(func(x interface{}) interface{} {
-		qp := x.(*dbox.QueryPart)
-		/*
-			fmt.Printf("[%s] QP = %s \n",
-				toolkit.Id(data),
-				toolkit.JsonString(qp))
-		*/
-		return qp.PartType
-	}, nil).Data
+	quyerParts := q.Parts()
+	c := crowd.From(&quyerParts)
+
+	groupParts := c.Group(func(x interface{}) interface{} {
+		return x.(*dbox.QueryPart).PartType
+	}, nil).Exec()
+
+	parts := map[interface{}]interface{}{}
+	if len(groupParts.Result.Data().([]crowd.KV)) > 0 {
+		for _, kv := range groupParts.Result.Data().([]crowd.KV) {
+			parts[kv.Key] = kv.Value
+		}
+	}
 
 	fromParts, hasFrom := parts[dbox.QueryPartFrom]
 	if !hasFrom {
-		/*
-			fmt.Printf("Data:\n%s\nParts:\n%s\nGrouped:\n%s\n",
-				toolkit.JsonString(data),
-				toolkit.JsonString(q.Parts()),
-				toolkit.JsonString(parts))
-		*/
-		return errorlib.Error(packageName, "Query", modQuery, "Invalid table name")
+		return errorlib.Error(packageName, modQuery, "Exec", "Invalid table name")
 	}
-	tablename = fromParts.([]interface{})[0].(*dbox.QueryPart).Value.(string)
+	tablename = fromParts.([]*dbox.QueryPart)[0].Value.(string)
 
 	var where interface{}
 	commandType := ""
@@ -308,8 +317,25 @@ func (q *Query) Exec(parm toolkit.M) error {
 		commandType = dbox.QueryPartSave
 	}
 
+	whereParts, hasWhere := parts[dbox.QueryPartWhere]
+	if hasWhere {
+		fb := q.Connection().Fb()
+		for _, p := range whereParts.([]*dbox.QueryPart) {
+			fs := p.Value.([]*dbox.Filter)
+			for _, f := range fs {
+				fb.AddFilter(f)
+			}
+		}
+		where, e = fb.Build()
+		if e != nil {
+			return errorlib.Error(packageName, modQuery, "Exec",
+				e.Error())
+		} else {
+			//fmt.Printf("Where: %s\n", toolkit.JsonString(where))
+		}
+	}
+
 	if data == nil {
-		//---
 		multi = true
 	} else {
 		if where == nil {
@@ -333,7 +359,15 @@ func (q *Query) Exec(parm toolkit.M) error {
 		e = mgoColl.Insert(data)
 	} else if commandType == dbox.QueryPartUpdate {
 		if multi {
-			_, e = mgoColl.UpdateAll(where, data)
+			dataM, e := toolkit.ToM(data)
+			if e != nil {
+				return errorlib.Error(packageName, modQuery+".Exec", commandType, e.Error())
+			}
+			if len(dataM) == 0 {
+				return errorlib.Error(packageName, modQuery+".Exec", commandType, "Update data points is empty")
+			}
+			updatedData := toolkit.M{}.Set("$set", dataM)
+			_, e = mgoColl.UpdateAll(where, updatedData)
 		} else {
 			e = mgoColl.Update(where, data)
 			if e != nil {
@@ -350,6 +384,7 @@ func (q *Query) Exec(parm toolkit.M) error {
 			}
 		}
 	} else if commandType == dbox.QueryPartSave {
+		//fmt.Println("Saving ", toolkit.JsonString(data))
 		_, e = mgoColl.Upsert(where, data)
 	}
 	if e != nil {
